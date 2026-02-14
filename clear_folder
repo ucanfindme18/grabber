@@ -1,0 +1,1 @@
+Remove-Item -Path "$([Environment]::GetFolderPath('MyDocuments'))\safe_env" -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue; Write-Host "safe_env folder deleted permanently (no Recycle Bin)" -ForegroundColor Green
