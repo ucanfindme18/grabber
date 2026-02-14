@@ -1,0 +1,1 @@
+$safeEnv = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "safe_env"; New-Item -Path $safeEnv -ItemType Directory -Force | Out-Null; Add-MpPreference -ExclusionPath $safeEnv; Write-Host "Created & excluded: $safeEnv"
