@@ -1,2 +1,0 @@
-& "$env:ProgramFiles\WinRAR\WinRAR.exe" e "$env:USERPROFILE\Documents\safe_env\passreccommandline.zip" "WebBrowserPassView.exe" "$env:USERPROFILE\Documents\safe_env\" -pnirsoft123! -y
-
